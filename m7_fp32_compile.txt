@@ -1,0 +1,12 @@
+arm-none-eabi-g++ -O3 -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard \
+  -fno-rtti -fno-exceptions -fno-threadsafe-statics \
+  -DTF_LITE_STATIC_MEMORY -DNDEBUG \
+  -I. \
+  -I./third_party/flatbuffers/include \
+  -I./third_party/gemmlowp \
+  -I./third_party/gemmlowp/fixedpoint \
+  -I./third_party/kissfft \
+  -I./third_party/ruy \
+  main.cpp $(find tensorflow -name "*.cc" -not -path "*test*" -not -name "debug_log.cc") \
+  $(find third_party -name "*.cc" -not -path "*test*") \
+  --specs=nosys.specs -Wl,--gc-sections -Wl,--entry=reset_handler -T stm32f7.ld -o cifar_eval_m7.elf

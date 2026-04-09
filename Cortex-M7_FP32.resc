@@ -1,0 +1,40 @@
+mach create
+machine LoadPlatformDescription @stm32f746.repl
+
+# 1. Load the ELF (Renode will automatically try to set the PC)
+sysbus LoadELF @cifar_eval_m7.elf
+
+# 2. Let the ELF file tell the CPU where to go
+# This is better than hardcoding 0x0800...
+# Force the CPU to start at our manual handler
+sysbus.cpu PC `sysbus GetSymbolAddress "reset_handler"`
+
+# 3. Use the RAM start + a safe offset for the Stack
+# For STM32F7, RAM starts at 0x20000000. Let's put the stack 256KB deep.
+sysbus.cpu SP 0x20040000
+
+# 2. Specifically allow the address that killed your last run
+sysbus Tag <0x400F4000 0x400F4FFF> "Clock_Control"
+
+showAnalyzer sysbus.usart1
+
+logLevel 3
+
+# 1. Create the log file
+sysbus.cpu LogFile @cpu_op_trace.log
+
+# 2. Set the level to track everything (Info is usually 0, Debug is -1 or custom)
+
+sysbus.cpu EnableOpcodesCounting true
+sysbus.cpu InstallOpcodeCounterPattern "FPU_OPS" "xxxx1110xxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+# 3. Now enable the heavy hitters
+sysbus.cpu LogTranslatedBlocks true
+
+sysbus ZeroRange 0x0 0x400
+sysbus Redirect 0x0 0x08000000 0x400
+start
+
+sysbus.cpu EnableProfilerCollapsedStack @performance_profile.txt
+sysbus.cpu ExecutedInstructions
