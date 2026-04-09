@@ -52,6 +52,13 @@ alignas(16) static uint8_t tensor_arena[tensor_arena_size];
 // --- RESET HANDLER ---
 extern "C" void __attribute__((naked, used, section(".text.reset_handler"))) reset_handler(void) {
     asm volatile (
+        "ldr r0, =0xE000ED88          \n" // CPACR
+        "ldr r1, [r0]                 \n"
+        "orr r1, r1, #(0xF << 20)     \n" // Enable CP10 and CP11
+        "str r1, [r0]                 \n"
+        "dsb sy                       \n"
+        "isb sy                       \n"
+        // arm-none-eabi-objdump -d cifar_eval_m7.elf | grep -E "vadd|vsub|vmul|vldr" | head -n 20
         "ldr r3, =_estack          \n"
         "msr msp, r3               \n"
         "isb                       \n"
