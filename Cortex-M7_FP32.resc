@@ -1,40 +1,71 @@
 mach create
-machine LoadPlatformDescription @stm32f746.repl
+machine LoadPlatformDescription @platforms/cpus/stm32f746.repl
 
-# 1. Load the ELF (Renode will automatically try to set the PC)
+# =========================
+# LOAD PROGRAM
+# =========================
 sysbus LoadELF @cifar_eval_m7.elf
 
-# 2. Let the ELF file tell the CPU where to go
-# This is better than hardcoding 0x0800...
-# Force the CPU to start at our manual handler
+# Force execution from reset handler (safe)
 sysbus.cpu PC `sysbus GetSymbolAddress "reset_handler"`
 
-# 3. Use the RAM start + a safe offset for the Stack
-# For STM32F7, RAM starts at 0x20000000. Let's put the stack 256KB deep.
-sysbus.cpu SP 0x20040000
+# Set stack pointer (top of RAM: 0x20000000 + 384KB)
+sysbus.cpu SP 0x20060000
 
-# 2. Specifically allow the address that killed your last run
-sysbus Tag <0x400F4000 0x400F4FFF> "Clock_Control"
+# =========================
+# FIXED PERIPHERAL MAPPING
+# =========================
 
+# RCC (you were mapping WRONG address before)
+sysbus Tag <0x40023800 0x40023FFF> "RCC"
+
+# USART1 (needed for DebugLog)
+sysbus Tag <0x40011000 0x400113FF> "USART1"
+
+# GPIOA (used by USART pins)
+sysbus Tag <0x40020000 0x400203FF> "GPIOA"
+
+# =========================
+# UART OUTPUT
+# =========================
+
+# Show UART output in Renode console
 showAnalyzer sysbus.usart1
+
+# =========================
+# MEMORY FIX (VERY IMPORTANT)
+# =========================
+
+# Redirect vector table reads from 0x0 → FLASH
+sysbus ZeroRange 0x0 0x400
+sysbus Redirect 0x0 0x08000000 0x400
+
+# =========================
+# LOGGING / DEBUG
+# =========================
 
 logLevel 3
 
-# 1. Create the log file
+# CPU trace log
 sysbus.cpu LogFile @cpu_op_trace.log
 
-# 2. Set the level to track everything (Info is usually 0, Debug is -1 or custom)
-
+# Opcode counting (FPU detection)
 sysbus.cpu EnableOpcodesCounting true
 sysbus.cpu InstallOpcodeCounterPattern "FPU_OPS" "xxxx1110xxxxxxxxxxxxxxxxxxxxxxxx"
 
-
-# 3. Now enable the heavy hitters
+# Translated blocks (JIT insight)
 sysbus.cpu LogTranslatedBlocks true
 
-sysbus ZeroRange 0x0 0x400
-sysbus Redirect 0x0 0x08000000 0x400
-start
+# =========================
+# PROFILING
+# =========================
 
 sysbus.cpu EnableProfilerCollapsedStack @performance_profile.txt
+
+# =========================
+# START
+# =========================
+start
+
+# Print instruction count after run
 sysbus.cpu ExecutedInstructions
