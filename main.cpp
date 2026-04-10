@@ -168,11 +168,17 @@ void Enable_DCache() {
     __asm volatile ("isb sy");
 }
 
+// DISABLE D-cache (avoids corruption)
+void Disable_DCache() {
+    SCB_CCR &= ~(1UL << 16);
+}
+
 // --- MAIN ---
 int main() {
 
     Enable_ICache();
     Enable_DCache();
+    // Disable_DCache();   // prevents memory corruption
 
     SCB_VTOR = 0x08000000;
     // 1. Hardware Init (Enable USART1)
@@ -237,7 +243,7 @@ int main() {
     DWT_CYCCNT = 0;
     // 4. Inference Loop
     for (int j = 0; j < 10; ++j) {
-        uint32_t start = DWT_CYCCNT;
+        volatile uint32_t start = DWT_CYCCNT;  // may be changed by outside code
         
         memcpy(input->data.f, image_sample_0[j], 32 * 32 * 3 * sizeof(float));
 
