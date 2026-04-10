@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdarg.h>
+#include <string.h>    // memcpy() used
 #include <stdio.h>
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -18,6 +19,9 @@
 extern "C" {
     extern uint32_t _estack;
     extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss;
+
+    void __libc_init_array(void);
+
     void reset_handler(void); 
     int main();
 
@@ -25,12 +29,13 @@ extern "C" {
     void DebugLog(const char* s) {
         volatile uint32_t *uart_tdr = (uint32_t *)0x40011028; 
         while (*s) {
+            while (!(*uart_sr & (1 << 7)));
             *uart_tdr = (uint32_t)(*s++);
         }
     }
 
     int DebugVsnprintf(char* buffer, size_t size, const char* format, va_list args) {
-        return vsnprintf(buffer, size, format, args);; 
+        return vsnprintf(buffer, size, format, args); 
     }
 }
 
@@ -52,37 +57,47 @@ alignas(16) static uint8_t tensor_arena[tensor_arena_size];
 // --- RESET HANDLER ---
 extern "C" void __attribute__((naked, used, section(".text.reset_handler"))) reset_handler(void) {
     asm volatile (
-        "ldr r0, =0xE000ED88          \n" // CPACR
+        "ldr r0, =0xE000ED88          \n"
         "ldr r1, [r0]                 \n"
-        "orr r1, r1, #(0xF << 20)     \n" // Enable CP10 and CP11
+        "orr r1, r1, #(0xF << 20)     \n"
         "str r1, [r0]                 \n"
         "dsb sy                       \n"
         "isb sy                       \n"
-        // arm-none-eabi-objdump -d cifar_eval_m7.elf | grep -E "vadd|vsub|vmul|vldr" | head -n 20
-        "ldr r3, =_estack          \n"
-        "msr msp, r3               \n"
-        "isb                       \n"
-        "ldr r0, =_sdata           \n"
-        "ldr r1, =_sidata          \n"
-        "ldr r2, =_edata           \n"
-        "copy_loop:                \n"
-        "cmp r0, r2                \n"
-        "itt lt                    \n"
-        "ldrlt r3, [r1], #4        \n"
-        "strlt r3, [r0], #4        \n"
-        "blt copy_loop             \n"
-        "ldr r0, =_sbss            \n"
-        "ldr r1, =_ebss            \n"
-        "mov r2, #0                \n"
-        "zero_loop:                \n"
-        "cmp r0, r1                \n"
-        "it lt                     \n"
-        "strlt r2, [r0], #4        \n"
-        "blt zero_loop             \n"
-        "ldr r0, =main             \n"
-        "orr r0, r0, #1            \n" 
-        "bx r0                     \n"
-        ".pool                     \n" 
+
+        // Stack
+        "ldr r3, =_estack             \n"
+        "msr msp, r3                  \n"
+        "isb                          \n"
+
+        // Copy .data
+        "ldr r0, =_sdata              \n"
+        "ldr r1, =_sidata             \n"
+        "ldr r2, =_edata              \n"
+        "copy_loop:                   \n"
+        "cmp r0, r2                   \n"
+        "itt lt                       \n"
+        "ldrlt r3, [r1], #4           \n"
+        "strlt r3, [r0], #4           \n"
+        "blt copy_loop                \n"
+
+        // Zero .bss
+        "ldr r0, =_sbss               \n"
+        "ldr r1, =_ebss               \n"
+        "mov r2, #0                   \n"
+        "zero_loop:                   \n"
+        "cmp r0, r1                   \n"
+        "it lt                        \n"
+        "strlt r2, [r0], #4           \n"
+        "blt zero_loop                \n"
+
+        // C++ init
+        "bl __libc_init_array         \n"
+
+        // Jump to main
+        "ldr r0, =main                \n"
+        "orr r0, r0, #1               \n"
+        "bx r0                        \n"
+        ".pool                        \n"
     );
 }
 
@@ -163,9 +178,21 @@ void Enable_ICache() {
 
 void Enable_DCache() {
     // Note: In a real chip, you'd invalidate the D-cache by set/way here
-    SCB_CCR |= (1UL << 16);      // Set DC bit in CCR (Bit 16)
+    //SCB_CCR |= (1UL << 16);      // Set DC bit in CCR (Bit 16)
+    //__asm volatile ("dsb sy");
+    //__asm volatile ("isb sy");
+    SCB_CCR &= ~(1 << 16);
+
+    for (int set = 0; set < 128; set++) {
+        for (int way = 0; way < 4; way++) {
+            SCB_DCISW = (way << 30) | (set << 5);
+        }
+    }
+
     __asm volatile ("dsb sy");
     __asm volatile ("isb sy");
+
+    SCB_CCR |= (1UL << 16);
 }
 
 // --- MAIN ---
@@ -175,6 +202,7 @@ int main() {
     Enable_DCache();
 
     SCB_VTOR = 0x08000000;
+    
     // 1. Hardware Init (Enable USART1)
     *(volatile uint32_t*)(0x40023830) |= (1 << 0); // GPIOA Clock
     *(volatile uint32_t*)(0x40023844) |= (1 << 4); // USART1 Clock
@@ -184,7 +212,8 @@ int main() {
     *((volatile uint32_t *)0xE000ED14) &= ~(1 << 4);
 
     // 1.3 FPU
-    *(volatile uint32_t*)(0xE000ED88) |= ((3UL << 10*2) | (3UL << 11*2));
+    //*(volatile uint32_t*)(0xE000ED88) |= ((3UL << 10*2) | (3UL << 11*2));
+    *(volatile uint32_t*)(0xE000ED88) |= (0xF << 20);
 
     __asm volatile ("dsb sy");
     __asm volatile ("isb sy");
@@ -195,6 +224,12 @@ int main() {
 
     // 2. TFLite Setup
     const tflite::Model* model = tflite::GetModel(cifar10_model_tflite);
+
+    // Schema check
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        DebugLog("Model schema mismatch!\n");
+        while(1);
+    }
     
     // INCREASED TO 20 CAPACITY
     static tflite::MicroMutableOpResolver<30> resolver;
